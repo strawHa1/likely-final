@@ -28,6 +28,9 @@ export interface CompanyProfile extends CompanyRisk {
   quote: StockQuote | null;
   activeImpactCount: number;
   inWatchlist: boolean;
+  action?: 'Safe' | 'Monitor' | 'Review' | 'Hedge' | 'Reduce';
+  countryIso?: string;
+  countryFlag?: string;
 }
 
 export interface LiveCountryRisk {
@@ -36,6 +39,7 @@ export interface LiveCountryRisk {
   isoCode: string;
   flag: string;
   region: string;
+  subregion?: string;
   riskScore: number;
   riskLevel: string;
   eventsCount: number;
@@ -44,6 +48,8 @@ export interface LiveCountryRisk {
   previousScore?: number;
   sparkline?: (number | null)[];
   monthDelta?: number | null;
+  isCurated?: boolean;
+  isHotspot?: boolean;
 }
 
 export interface GlobalEvent {
@@ -122,15 +128,36 @@ export interface ImpactStoreState {
   source: string;
 }
 
+export interface SearchListingBadge {
+  symbol: string;
+  exchange: string;
+}
+
+export interface SearchFilters {
+  region?: string;
+  country?: string;
+  exchange?: string;
+  type?: string;
+}
+
 export interface SearchResultItem {
   symbol: string;
   displaySymbol: string;
   name: string;
   exchange: string;
   type: string;
+  country: string;
+  region: string;
+  sector: string;
+  currency?: string;
+  industry?: string;
+  aliases?: string[];
+  isin?: string;
   logoUrl?: string;
   quote?: StockQuote | null;
   marketStatus: 'LIVE' | 'Closed' | 'Premarket' | 'After Hours';
+  listings?: SearchListingBadge[];
+  isLiveSearch?: boolean;
 }
 
 export interface CompanyRisk {
@@ -167,19 +194,28 @@ export interface CountryRisk {
 export interface PortfolioHolding {
   id: string;
   ticker: string;
-  name: string;
-  sector: string;
+  companyName: string;
+  exchange?: string;
+  country?: string;
+  currency?: string;
+  sector?: string;
   shares: number;
-  price: number;
-  prevClose: number;
-  riskScore: number;
-  companyName?: string;
-  costBasis?: number;
   avgCost?: number;
+  addedAt?: number;
+  // Computed runtime fields
+  name?: string;
+  price?: number;
+  prevClose?: number;
+  costBasis?: number;
   currentValue?: number;
   allocationPct?: number;
+  riskScore?: number;
   recommendedAction?: string;
   action?: string;
+  region?: string;
+  countryIso?: string;
+  countryFlag?: string;
+  isEstimatedRisk?: boolean;
 }
 
 export interface PortfolioItem extends PortfolioHolding {}

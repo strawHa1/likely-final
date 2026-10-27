@@ -32,16 +32,16 @@ const TICKER_STOPWORDS = new Set([
 ]);
 
 const INVEST_RE =
-  /\b(?:invest|buy|purchase|allocate|put)\s+\$?\s*([\d,]+(?:\.\d+)?)\s*(k|m)?\s*(?:dollars?|usd)?\s*(?:worth\s*)?(?:in|into|on|of|to)\s+\$?([A-Za-z][A-Za-z.\-]{0,5})\b/i;
+  /\b(?:invest|buy|purchase|allocate|put)\s+\$?\s*([\d,]+(?:\.\d+)?)\s*(k|m)?\s*(?:dollars?|usd)?\s*(?:worth\s*)?(?:in|into|on|of|to)\s+\$?([A-Za-z0-9][A-Za-z0-9.\-]{0,14})\b/i;
 
 const WITHDRAW_RE =
-  /\b(?:withdraw|sell|redeem|liquidate|pull)\s+\$?\s*([\d,]+(?:\.\d+)?)\s*(k|m)?\s*(?:dollars?|usd)?\s*(?:worth\s*)?(?:from|of|in|out\s+of)\s+\$?([A-Za-z][A-Za-z.\-]{0,5})\b/i;
+  /\b(?:withdraw|sell|redeem|liquidate|pull)\s+\$?\s*([\d,]+(?:\.\d+)?)\s*(k|m)?\s*(?:dollars?|usd)?\s*(?:worth\s*)?(?:from|of|in|out\s+of)\s+\$?([A-Za-z0-9][A-Za-z0-9.\-]{0,14})\b/i;
 
 const RISK_ALERT_RE =
   /\b(?:alert|notify|tell|warn|ping)\b[^.?!]*?\b(?:if|when|whenever)\b\s+(?:the\s+)?(.+?)\s+risk(?:\s+(?:index|score|level))?\s*(?:goes?|rises?|climbs?|moves?|drops?|falls?|is)?\s*(above|over|below|under|exceeds?|beyond)\s+(\d+(?:\.\d+)?)\s*%?/i;
 
 const PRICE_ALERT_RE =
-  /\b(?:alert|notify|tell|warn|ping)\b[^.?!]*?\b(?:if|when|whenever)\b\s+\$?([A-Za-z][A-Za-z.\-]{0,5})\b\s+(?:stock\s+)?(?:share\s+)?(?:price\s+)?(?:goes?|drops?|falls?|rises?|climbs?|moves?|trades?|hits?|reaches?|is)?\s*(above|over|below|under|exceeds?|beyond)\s+\$?\s*([\d,]+(?:\.\d+)?)\s*(k)?/i;
+  /\b(?:alert|notify|tell|warn|ping)\b[^.?!]*?\b(?:if|when|whenever)\b\s+\$?([A-Za-z0-9][A-Za-z0-9.\-]{0,14})\b\s+(?:stock\s+)?(?:share\s+)?(?:price\s+)?(?:goes?|drops?|falls?|rises?|climbs?|moves?|trades?|hits?|reaches?|is)?\s*(above|over|below|under|exceeds?|beyond)\s+\$?\s*([\d,]+(?:\.\d+)?)\s*(k)?/i;
 
 /** Expands "5k" / "2.5m" / "1,200" into a plain number. */
 function parseAmount(numeric: string, suffix?: string): number {
@@ -54,8 +54,8 @@ function parseAmount(numeric: string, suffix?: string): number {
 }
 
 function normalizeTicker(raw: string): string | null {
-  const ticker = raw.replace(/[^A-Za-z.\-]/g, '').toUpperCase();
-  if (!ticker || ticker.length > 6 || TICKER_STOPWORDS.has(ticker)) return null;
+  const ticker = raw.replace(/[^A-Za-z0-9.\-]/g, '').toUpperCase();
+  if (!ticker || ticker.length > 15 || TICKER_STOPWORDS.has(ticker)) return null;
   return ticker;
 }
 

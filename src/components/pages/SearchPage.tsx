@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Search,
   Building2,
@@ -10,13 +10,15 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
-  Sparkles
+  Sparkles,
+  Loader2
 } from 'lucide-react';
-import { GlobalEvent, CompanyRisk } from '../../types';
-import { INITIAL_COUNTRIES, INITIAL_REPORTS } from '../../data/mockData';
+import { GlobalEvent, CompanyRisk, SearchResultItem } from '../../types';
+import { INITIAL_REPORTS } from '../../data/mockData';
 import { SeverityBadge } from '../common/SeverityBadge';
 import { LiveStockPrice } from '../common/LiveStockPrice';
 import { computeInvestmentRiskSignal } from '../../utils/riskSignal';
+import { useCountryRisk } from '../../lib/useCountryRisk';
 
 interface SearchPageProps {
   onNavigate: (path: string) => void;
@@ -34,8 +36,13 @@ export const SearchPage: React.FC<SearchPageProps> = ({
   const [query, setQuery] = useState('Taiwan');
   const [activeTab, setActiveTab] = useState<'all' | 'companies' | 'events' | 'countries' | 'reports'>('all');
   const [reports, setReports] = useState(INITIAL_REPORTS);
+  const [liveSymbolResults, setLiveSymbolResults] = useState<SearchResultItem[]>([]);
+  const [searchingSymbols, setSearchingSymbols] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  React.useEffect(() => {
+  const { countries } = useCountryRisk();
+
+  useEffect(() => {
     fetch('/api/reports')
       .then((r) => r.json())
       .then((d) => {
@@ -46,39 +53,134 @@ export const SearchPage: React.FC<SearchPageProps> = ({
       .catch(() => {});
   }, []);
 
-  const matchedCompanies = companies.filter(
-    (c) =>
-      c.name.toLowerCase().includes(query.toLowerCase()) ||
-      c.ticker.toLowerCase().includes(query.toLowerCase()) ||
-      c.sector.toLowerCase().includes(query.toLowerCase())
-  );
+  // Debounced live symbol search proxying global exchanges
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setLiveSymbolResults([]);
+      setSearchingSymbols(false);
+      return;
+    }
 
-  const matchedEvents = events.filter(
-    (e) =>
-      e.title.toLowerCase().includes(query.toLowerCase()) ||
-      e.region.toLowerCase().includes(query.toLowerCase()) ||
-      e.description.toLowerCase().includes(query.toLowerCase())
-  );
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
-  const matchedCountries = INITIAL_COUNTRIES.filter(
-    (c) =>
-      c.name.toLowerCase().includes(query.toLowerCase()) ||
-      c.region.toLowerCase().includes(query.toLowerCase())
-  );
+    setSearchingSymbols(true);
+    const timer = setTimeout(() => {
+      fetch(`/api/symbols/search?q=${encodeURIComponent(q)}&limit=8`, {
+        signal: controller.signal
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d.results)) {
+            setLiveSymbolResults(d.results);
+          }
+        })
+        .catch((err) => {
+          if (err.name !== 'AbortError') {
+            /* ignore */
+          }
+        })
+        .finally(() => {
+          setSearchingSymbols(false);
+        });
+    }, 300);
 
-  const matchedReports = reports.filter(
-    (r) =>
-      r.title.toLowerCase().includes(query.toLowerCase()) ||
-      r.summary.toLowerCase().includes(query.toLowerCase())
-  );
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+
+  // Merge static/cached companies with live symbol search results
+  const matchedCompanies = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    const map = new Map<string, CompanyRisk>();
+
+    // 1. Check local companies prop
+    for (const c of companies) {
+      if (
+        c.name.toLowerCase().includes(q) ||
+        c.ticker.toLowerCase().includes(q) ||
+        c.sector.toLowerCase().includes(q) ||
+        c.country.toLowerCase().includes(q)
+      ) {
+        map.set(c.ticker.toUpperCase(), c);
+      }
+    }
+
+    // 2. Merge live global search results
+    for (const item of liveSymbolResults) {
+      const sym = item.displaySymbol.toUpperCase();
+      if (!map.has(sym)) {
+        map.set(sym, {
+          ticker: sym,
+          name: item.name,
+          sector: item.sector || 'Diversified',
+          country: item.country || 'Global',
+          marketCap: 'N/A',
+          riskScore: 50,
+          sentimentScore: 50,
+          sentimentLabel: 'Neutral',
+          description: `${item.name} (${sym}) — listed on ${item.exchange}.`,
+          keyRisks: [`${item.exchange} market trading exposure`, `Sector volatility (${item.sector})`],
+          aiSummary: `${item.name} quantitative tracking active on ${item.exchange}.`,
+          recentNews: [],
+          riskTrend: []
+        });
+      }
+    }
+
+    return Array.from(map.values());
+  }, [query, companies, liveSymbolResults]);
+
+  const matchedEvents = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    return events.filter(
+      (e) =>
+        e.title.toLowerCase().includes(q) ||
+        e.region.toLowerCase().includes(q) ||
+        e.description.toLowerCase().includes(q)
+    );
+  }, [events, query]);
+
+  // Universal country search across all 250 countries & territories
+  const matchedCountries = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return countries.slice(0, 12);
+    return countries.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.isoCode.toLowerCase() === q ||
+        c.region.toLowerCase().includes(q) ||
+        (c.subregion && c.subregion.toLowerCase().includes(q))
+    );
+  }, [countries, query]);
+
+  const matchedReports = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    return reports.filter(
+      (r) =>
+        r.title.toLowerCase().includes(q) ||
+        r.summary.toLowerCase().includes(q) ||
+        (Array.isArray(r.tags) && r.tags.some((t) => t.toLowerCase().includes(q)))
+    );
+  }, [reports, query]);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto font-sans">
+    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto font-sans">
       {/* Header & Big Search Input */}
       <div className="space-y-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">Global Terminal Search</h1>
-          <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5">Search across tickers, live prices, quantitative risk signals, and macro events</p>
+          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+            Global Terminal Search
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5">
+            Universal search across all ~195+ countries, global equities (NSE, BSE, NYSE, NASDAQ, LSE, TSE, KRX), live risk signals, and macro events
+          </p>
         </div>
 
         <div className="relative max-w-2xl">
@@ -86,10 +188,13 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search keywords (e.g., Taiwan, Semiconductor, Hormuz, NVDA...)"
-            className="w-full bg-white dark:bg-[#0F1420] border-2 border-blue-500/50 rounded-2xl px-5 py-4 pl-12 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-600 font-mono shadow-md dark:shadow-2xl transition-colors"
+            placeholder="Search any country or company (e.g. Brazil, Tata Steel, Samsung, Nestle, Visa, Taiwan, Hormuz)..."
+            className="w-full bg-white dark:bg-[#0F1420] border-2 border-blue-500/50 rounded-2xl px-5 py-4 pl-12 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-600 font-sans shadow-md dark:shadow-2xl transition-colors"
           />
           <Search className="w-5 h-5 text-blue-600 dark:text-blue-400 absolute left-4 top-4.5" />
+          {searchingSymbols && (
+            <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-4 top-5" />
+          )}
         </div>
       </div>
 
@@ -98,8 +203,8 @@ export const SearchPage: React.FC<SearchPageProps> = ({
         {[
           { id: 'all', label: 'All Results' },
           { id: 'companies', label: `Companies (${matchedCompanies.length})` },
-          { id: 'events', label: `Events (${matchedEvents.length})` },
           { id: 'countries', label: `Countries (${matchedCountries.length})` },
+          { id: 'events', label: `Events (${matchedEvents.length})` },
           { id: 'reports', label: `Reports (${matchedReports.length})` }
         ].map((tab) => (
           <button
@@ -118,6 +223,43 @@ export const SearchPage: React.FC<SearchPageProps> = ({
 
       {/* Results Content */}
       <div className="space-y-6">
+        {/* Countries Section */}
+        {(activeTab === 'all' || activeTab === 'countries') && matchedCountries.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <Globe2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              Matched Countries & Geopolitical Regions ({matchedCountries.length})
+            </h3>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {matchedCountries.slice(0, activeTab === 'countries' ? 48 : 8).map((c) => (
+                <div
+                  key={c.id}
+                  onClick={() => onNavigate(`/events?country=${encodeURIComponent(c.isoCode)}&region=${encodeURIComponent(c.region)}`)}
+                  className="p-3.5 rounded-2xl bg-white dark:bg-[#0F1420] border border-slate-200 dark:border-[#232A3D] hover:border-blue-500/50 cursor-pointer transition-all shadow-sm space-y-2 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-2xl">{c.flag}</span>
+                    <SeverityBadge severity={c.riskLevel.toLowerCase()} size="sm" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-slate-900 dark:text-white group-hover:text-blue-500 transition-colors line-clamp-1">
+                      {c.name}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                      {c.region} • {c.isoCode}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-[#232A3D]/50 text-[10px] font-mono">
+                    <span className="text-slate-500">{c.eventsCount > 0 ? `${c.eventsCount} events` : 'Baseline'}</span>
+                    <span className="font-bold text-red-500 dark:text-red-400">{c.riskScore}/100</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Companies Section */}
         {(activeTab === 'all' || activeTab === 'companies') && matchedCompanies.length > 0 && (
           <div className="space-y-3">
@@ -126,7 +268,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             </h3>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              {matchedCompanies.map((c) => {
+              {matchedCompanies.slice(0, activeTab === 'companies' ? 24 : 6).map((c) => {
                 const signal = computeInvestmentRiskSignal(c, 2, userRiskTolerance);
 
                 return (
@@ -228,6 +370,51 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             </div>
           </div>
         )}
+
+        {/* Reports Section */}
+        {(activeTab === 'all' || activeTab === 'reports') && matchedReports.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> Matched Intelligence Reports ({matchedReports.length})
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {matchedReports.map((r) => (
+                <div
+                  key={r.id}
+                  onClick={() => onNavigate(`/reports?id=${r.id}`)}
+                  className="p-4 rounded-2xl bg-white dark:bg-[#0F1420] border border-slate-200 dark:border-[#232A3D] hover:border-emerald-500/50 cursor-pointer transition-all space-y-2 shadow-sm group"
+                >
+                  <div className="flex items-center justify-between">
+                    <SeverityBadge severity={r.severityTag.toLowerCase()} size="sm" />
+                    <span className="text-[10px] text-slate-400 font-mono">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'Recent'}</span>
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-emerald-500 transition-colors line-clamp-1">
+                    {r.title}
+                  </h4>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">
+                    {r.summary}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {matchedCompanies.length === 0 &&
+          matchedCountries.length === 0 &&
+          matchedEvents.length === 0 &&
+          matchedReports.length === 0 && (
+            <div className="bg-white dark:bg-[#0F1420] border border-slate-200 dark:border-[#232A3D] p-12 rounded-2xl text-center space-y-2">
+              <p className="text-base font-bold text-slate-800 dark:text-slate-200">
+                No results found for "{query}"
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Try searching for any sovereign country (e.g. Brazil, Nigeria, Vietnam, Oman), or global equities (e.g. Tata Steel, Samsung, Nestle, NVDA, AAPL).
+              </p>
+            </div>
+          )}
       </div>
     </div>
   );

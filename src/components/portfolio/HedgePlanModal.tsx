@@ -1,27 +1,34 @@
+/**
+ * src/components/portfolio/HedgePlanModal.tsx
+ *
+ * Tail-Risk Hedge Advisory Modal.
+ * Supports both US options contracts and non-US / fractional advisory.
+ */
+
 import React, { useEffect } from 'react';
 import {
   X,
-  Shield,
   ShieldAlert,
-  ArrowRight,
-  TrendingDown,
   Info,
-  ExternalLink,
   CheckCircle2,
-  AlertCircle
+  AlertTriangle,
+  ExternalLink
 } from 'lucide-react';
-import { HedgeRecommendation, formatCurrency, formatPercent } from '../../utils/portfolioMath';
+import { HedgeRecommendation } from '../../utils/portfolioMath';
+import { formatMoney } from '../../lib/fxService';
 
 interface HedgePlanModalProps {
   hedge: HedgeRecommendation;
   onClose: () => void;
   onNavigateToCompany: (ticker: string) => void;
+  baseCurrency?: string;
 }
 
 export const HedgePlanModal: React.FC<HedgePlanModalProps> = ({
   hedge,
   onClose,
-  onNavigateToCompany
+  onNavigateToCompany,
+  baseCurrency = 'USD'
 }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -52,11 +59,9 @@ export const HedgePlanModal: React.FC<HedgePlanModalProps> = ({
               <ShieldAlert className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 id="hedge-plan-title" className="text-base font-extrabold text-slate-900 dark:text-white">
-                  Institutional Hedge Plan — ${hedge.ticker}
-                </h3>
-              </div>
+              <h3 id="hedge-plan-title" className="text-base font-extrabold text-slate-900 dark:text-white">
+                Hedge Plan — ${hedge.ticker}
+              </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                 {hedge.companyName} &bull; Tail-Risk Mitigation Protocol
               </p>
@@ -84,7 +89,7 @@ export const HedgePlanModal: React.FC<HedgePlanModalProps> = ({
               {hedge.actionTitle}
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              Provides asymmetric downside insurance against extreme geopolitical or supply chain shocks while preserving long-term stock equity upside.
+              {hedge.strategyDescription}
             </p>
           </div>
 
@@ -92,34 +97,34 @@ export const HedgePlanModal: React.FC<HedgePlanModalProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#161B2C] border border-slate-200 dark:border-[#232A3D]">
               <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400">
-                Notional Hedged
+                Position Value
               </span>
               <div className="text-sm font-black font-mono text-slate-900 dark:text-white mt-1">
-                {formatCurrency(hedge.notionalHedged)}
+                {formatMoney(hedge.basePositionValue, baseCurrency)}
               </div>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#161B2C] border border-slate-200 dark:border-[#232A3D]">
               <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400">
-                Contracts Needed
+                Shares Held
               </span>
               <div className="text-sm font-black font-mono text-purple-600 dark:text-purple-400 mt-1">
-                {hedge.contractsNeeded} ({hedge.shares} shs)
+                {hedge.shares} shs
               </div>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#161B2C] border border-slate-200 dark:border-[#232A3D]">
               <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400">
-                Strike Price
+                Strike Target
               </span>
               <div className="text-sm font-black font-mono text-slate-900 dark:text-white mt-1">
-                ${hedge.suggestedStrike} (~8% OTM)
+                ~{hedge.suggestedStrikeFormatted}
               </div>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#161B2C] border border-slate-200 dark:border-[#232A3D]">
               <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400">
-                Expiration
+                Target Horizon
               </span>
               <div className="text-sm font-black font-mono text-slate-900 dark:text-white mt-1">
                 {hedge.expiration}
@@ -127,43 +132,42 @@ export const HedgePlanModal: React.FC<HedgePlanModalProps> = ({
             </div>
           </div>
 
-          {/* Estimated Cost & Payoff */}
-          <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs space-y-1.5">
-            <div className="font-bold text-blue-600 dark:text-blue-300 flex items-center justify-between">
-              <span>Estimated Hedge Premium Cost</span>
-              <span className="font-mono">{formatCurrency(totalEstimatedCost)} (~2.8% of notional)</span>
-            </div>
-            <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
-              Maximum loss on this position is capped below ${hedge.suggestedStrike} strike. If a tail-risk event triggers an adverse drop, option gains offset holding losses dollar-for-dollar below strike.
-            </p>
-          </div>
-
-          {/* Execution Checklist */}
-          <div>
-            <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider mb-2">
-              Broker Execution Steps
-            </h4>
-            <div className="space-y-2 text-xs text-slate-600 dark:text-slate-300">
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span>Log into brokerage account containing ${hedge.ticker} equity shares.</span>
+          {/* Execution Guidance */}
+          {hedge.isNonUS ? (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1.5 text-amber-800 dark:text-amber-200">
+              <div className="font-bold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+                <span>International Asset Advisory</span>
               </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span>
-                  Select ${hedge.ticker} Put Options chain expiring in ~60 days with strike around ${hedge.suggestedStrike}.
+              <p className="leading-relaxed text-[11px]">
+                {hedge.ticker} trades on {hedge.exchange} outside standard US equity options exchanges. To hedge downside risk, consider utilizing index put options on correlated regional ETFs, or reducing exposure to your target risk band.
+              </p>
+            </div>
+          ) : hedge.insufficientShares ? (
+            <div className="p-3.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs space-y-1.5 text-sky-800 dark:text-sky-200">
+              <div className="font-bold flex items-center gap-2">
+                <Info className="w-4 h-4 text-sky-500" />
+                <span>Fractional Position Advisory</span>
+              </div>
+              <p className="leading-relaxed text-[11px]">
+                Standard exchange-traded equity put contracts represent 100 shares. Since your position holds {hedge.shares} shares, a standard contract would over-hedge your position. We recommend setting a downside stop-loss order or trimming high-beta exposure.
+              </p>
+            </div>
+          ) : (
+            <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs space-y-1.5">
+              <div className="font-bold text-blue-600 dark:text-blue-300 flex items-center justify-between">
+                <span>Estimated Premium Budget</span>
+                <span className="font-mono">
+                  ~{formatMoney(totalEstimatedCost, hedge.currency)} (~2.8% of notional)
                 </span>
               </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span>
-                  Submit Buy to Open limit order for {hedge.contractsNeeded} contract{hedge.contractsNeeded > 1 ? 's' : ''}.
-                </span>
-              </div>
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
+                Target {hedge.contractsNeeded} protective put contract{hedge.contractsNeeded > 1 ? 's' : ''} expiring in ~60 days. If an adverse event causes a sharp decline, the options offset holding losses below the strike price.
+              </p>
             </div>
-          </div>
+          )}
 
-          {/* Non-blocking Disclaimer */}
+          {/* Disclaimer */}
           <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#161B2C] border border-slate-200 dark:border-[#232A3D] text-[11px] text-slate-500 dark:text-slate-400 flex items-start gap-2">
             <Info className="w-4 h-4 shrink-0 mt-0.5 text-slate-400" />
             <span>{hedge.disclaimer}</span>
@@ -180,7 +184,7 @@ export const HedgePlanModal: React.FC<HedgePlanModalProps> = ({
             }}
             className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
           >
-            Open ${hedge.ticker} Company Analysis →
+            Open ${hedge.ticker} Details →
           </button>
 
           <button

@@ -1,0 +1,125 @@
+[
+  {
+    "symbol": "SHOP",
+    "name": "Shopify Inc.",
+    "exchange": "NASDAQ",
+    "type": "Common Stock",
+    "country": "United States",
+    "sector": "Technology",
+    "industry": "Software—Application"
+  },
+  {
+    "symbol": "SHOP.TO",
+    "name": "Shopify Inc.",
+    "exchange": "TSX",
+    "type": "Common Stock",
+    "country": "Canada",
+    "sector": "Technology",
+    "industry": "Software—Application"
+  },
+  {
+    "symbol": "SHPU",
+    "name": "Direxion Daily SHOP Bull 2X ETF",
+    "exchange": "NASDAQ",
+    "type": "ETF",
+    "country": "United States",
+    "sector": "Diversified"
+  },
+  {
+    "symbol": "FSHOP13.MX",
+    "name": "Fibra Shop",
+    "exchange": "BMV",
+    "type": "Common Stock",
+    "country": "Mexico",
+    "sector": "Real Estate",
+    "industry": "REIT—Retail"
+  },
+  {
+    "symbol": "HGBS11.SA",
+    "name": "HEDGE Brasil Shopping Fundo de Investimento Imobiliário",
+    "exchange": "B3",
+    "type": "Common Stock",
+    "country": "Brazil",
+    "sector": "Real Estate",
+    "industry": "REIT—Retail"
+  },
+  {
+    "symbol": "TTSH",
+    "name": "Tile Shop Holdings, Inc.",
+    "exchange": "PNK",
+    "type": "Common Stock",
+    "country": "United States",
+    "sector": "Consumer Cyclical",
+    "industry": "Home Improvement Retail"
+  },
+  {
+    "symbol": "SHP.JO",
+    "name": "Shoprite Holdings Ltd",
+    "exchange": "JSE",
+    "type": "Common Stock",
+    "country": "South Africa",
+    "sector": "Consumer Cyclical",
+    "industry": "Department Stores"
+  },
+  {
+    "symbol": "2222.SR",
+    "name": "Saudi Arabian Oil Group",
+    "exchange": "TADAWUL",
+    "type": "Common Stock",
+    "country": "Global",
+    "currency": "SAR",
+    "sector": "Diversified"
+  },
+  {
+    "symbol": "TTWO",
+    "name": "Take-Two Interactive Software, Inc.",
+    "exchange": "NASDAQ",
+    "type": "Common Stock",
+    "country": "United States",
+    "sector": "Communication Services",
+    "industry": "Electronic Gaming & Multimedia"
+  },
+  {
+    "symbol": "TTWO.MX",
+    "name": "Take-Two Interactive Software, Inc.",
+    "exchange": "BMV",
+    "type": "Common Stock",
+    "country": "Mexico",
+    "sector": "Communication Services",
+    "industry": "Electronic Gaming & Multimedia"
+  },
+  {
+    "symbol": "TKE.DE",
+    "name": "Take-Two Interactive Software, Inc.",
+    "exchange": "XETRA",
+    "type": "Common Stock",
+    "country": "Germany",
+    "sector": "Communication Services",
+    "industry": "Electronic Gaming & Multimedia"
+  },
+  {
+    "symbol": "TTWO.VI",
+    "name": "Take-Two Interactive Software, Inc.",
+    "exchange": "VIE",
+    "type": "Common Stock",
+    "country": "Austria",
+    "sector": "Communication Services",
+    "industry": "Electronic Gaming & Multimedia"
+  },
+  {
+    "symbol": "TKED.XD",
+    "name": "Take-Two Interactive Software I",
+    "exchange": "DXE",
+    "type": "Common Stock",
+    "country": "United States",
+    "sector": "Diversified"
+  },
+  {
+    "symbol": "TTWO-USD.SW",
+    "name": "TAKE-TWO INTERACT. SOFTW.",
+    "exchange": "SIX",
+    "type": "Common Stock",
+    "country": "Switzerland",
+    "sector": "Diversified"
+  }
+]

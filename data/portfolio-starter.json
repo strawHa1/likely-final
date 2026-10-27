@@ -1,0 +1,62 @@
+[
+  {
+    "id": "port-1",
+    "ticker": "NVDA",
+    "companyName": "NVIDIA Corporation",
+    "exchange": "NASDAQ",
+    "country": "US",
+    "currency": "USD",
+    "sector": "Semiconductors",
+    "shares": 150,
+    "avgCost": 118.5,
+    "addedAt": 1729500000000
+  },
+  {
+    "id": "port-2",
+    "ticker": "TSM",
+    "companyName": "Taiwan Semiconductor Mfg.",
+    "exchange": "NYSE",
+    "country": "TW",
+    "currency": "USD",
+    "sector": "Semiconductors",
+    "shares": 200,
+    "avgCost": 142,
+    "addedAt": 1729500001000
+  },
+  {
+    "id": "port-3",
+    "ticker": "AAPL",
+    "companyName": "Apple Inc.",
+    "exchange": "NASDAQ",
+    "country": "US",
+    "currency": "USD",
+    "sector": "Technology",
+    "shares": 120,
+    "avgCost": 210.3,
+    "addedAt": 1729500002000
+  },
+  {
+    "id": "port-4",
+    "ticker": "XOM",
+    "companyName": "Exxon Mobil Corporation",
+    "exchange": "NYSE",
+    "country": "US",
+    "currency": "USD",
+    "sector": "Energy",
+    "shares": 180,
+    "avgCost": 104.1,
+    "addedAt": 1729500003000
+  },
+  {
+    "id": "port-5",
+    "ticker": "LMT",
+    "companyName": "Lockheed Martin Corporation",
+    "exchange": "NYSE",
+    "country": "US",
+    "currency": "USD",
+    "sector": "Industrials",
+    "shares": 40,
+    "avgCost": 452,
+    "addedAt": 1729500004000
+  }
+]

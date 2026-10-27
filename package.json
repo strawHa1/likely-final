@@ -16,7 +16,12 @@
     "test:alert-engine": "tsx scripts/test-alert-engine.ts",
     "test:impact": "tsx scripts/test-impact-comprehensive.ts",
     "test:reports": "tsx scripts/test-reports-engine.ts",
-    "test:portfolio": "tsx scripts/test-portfolio-risk.ts"
+    "test:portfolio": "tsx scripts/test-portfolio-risk.ts",
+    "build:symbols": "tsx scripts/build-symbols.ts",
+    "validate:symbols": "tsx scripts/validate-symbols.ts",
+    "generate:portfolio": "tsx scripts/generate-portfolio.ts",
+    "validate:portfolio": "tsx scripts/validate-portfolio.ts",
+    "test:search": "tsx scripts/test-search-engine.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -32,7 +37,8 @@
     "react-markdown": "^10.1.0",
     "recharts": "^3.10.0",
     "remark-gfm": "^4.0.1",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "world-countries": "^5.1.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

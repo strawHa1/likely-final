@@ -14,13 +14,17 @@ import {
 import {
   getWatchlist,
   searchWatchlist,
+  addWatchlistEntry,
+  removeWatchlistEntry,
+  getStoredPortfolioHoldings,
+  saveStoredPortfolioHoldings,
   getCompanyProfile,
   getLiveCountryRisk,
   computeLiveCountryRisk,
   fetchQuote,
   fetchQuotesBatch
 } from './marketDataService.js';
-import { searchMarketSymbols, refreshSearchQuotes, initSearchUniverse } from './searchService.js';
+import { searchMarketSymbols, refreshSearchQuotes, initSearchUniverse, lookupMarketSymbolLive, addCustomSymbol } from './searchService.js';
 import {
   getTrendHistory,
   hasSnapshot,
@@ -67,6 +71,13 @@ console.log('[AI] Env files loaded:', envLoad.loaded.length ? envLoad.loaded.joi
 if (envLoad.errors.length) {
   console.warn('[AI] Env load warnings:', envLoad.errors.join(' | '));
 }
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception:', err);
+});
 
 const app = express();
 const PORT = 3002;
@@ -173,19 +184,51 @@ app.get('/api/stocks/quotes', async (req, res) => {
   }
 });
 
-/** Universal live symbol search (Finnhub) */
-app.get('/api/search', async (req, res) => {
+/** Universal live symbol search (indexed local universe + filters) */
+app.get(['/api/symbols/search', '/api/search'], async (req, res) => {
   try {
     const q = (req.query.q as string) || '';
     const page = Math.max(1, parseInt((req.query.page as string) || '1', 10) || 1);
     const limit = Math.min(parseInt((req.query.limit as string) || '20', 10) || 20, 50);
-    const data = await searchMarketSymbols(q, page, limit);
+    const filters = {
+      region: req.query.region as string | undefined,
+      country: req.query.country as string | undefined,
+      exchange: req.query.exchange as string | undefined,
+      type: req.query.type as string | undefined
+    };
+    const data = await searchMarketSymbols(q, page, limit, filters);
     if (data.error) {
       return res.status(503).json(data);
     }
     res.json(data);
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Search failed', results: [], total: 0, hasMore: false });
+  }
+});
+
+/** Live fallback lookup for companies not in database (4s timeout, rate-limited, cached 24h) */
+app.get('/api/symbols/lookup', async (req, res) => {
+  try {
+    const q = (req.query.q as string) || '';
+    const clientIp = req.ip || (req.headers['x-forwarded-for'] as string) || 'default';
+    const data = await lookupMarketSymbolLive(q, clientIp);
+    res.json(data);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Live lookup failed', results: [], fromLiveCount: 0 });
+  }
+});
+
+/** Custom user symbol creation with live quote verification */
+app.post('/api/symbols/custom', async (req, res) => {
+  try {
+    const { symbol, name, exchange, currency, country, sector, type } = req.body || {};
+    const result = await addCustomSymbol({ symbol, name, exchange, currency, country, sector, type });
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || 'Failed to add custom symbol' });
   }
 });
 
@@ -203,11 +246,118 @@ app.get('/api/search/quotes', async (req, res) => {
   }
 });
 
-/** Curated watchlist search */
+/** Watchlist search & retrieval */
 app.get('/api/watchlist', (req, res) => {
   const q = (req.query.q as string) || '';
   const limit = Math.min(parseInt((req.query.limit as string) || '20', 10) || 20, 50);
   res.json({ entries: q ? searchWatchlist(q, limit) : getWatchlist(), count: getWatchlist().length });
+});
+
+/** Add ticker to user watchlist */
+app.post('/api/watchlist', (req, res) => {
+  try {
+    const { ticker, companyName, sector, exchange, country, region } = req.body || {};
+    if (!ticker) return res.status(400).json({ error: 'Ticker is required' });
+    const entry = addWatchlistEntry({
+      ticker,
+      companyName: companyName || ticker,
+      sector: sector || 'Diversified',
+      exchange: exchange || 'US',
+      country: country || 'United States',
+      region: region || 'North America'
+    });
+    res.json({ ok: true, entry, entries: getWatchlist() });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to add to watchlist' });
+  }
+});
+
+/** Remove ticker from user watchlist */
+app.delete('/api/watchlist/:ticker', (req, res) => {
+  try {
+    removeWatchlistEntry(req.params.ticker);
+    res.json({ ok: true, entries: getWatchlist() });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to remove from watchlist' });
+  }
+});
+
+/** Get user portfolio holdings */
+app.get('/api/portfolio', (req, res) => {
+  try {
+    const holdings = getStoredPortfolioHoldings();
+    res.json({ holdings });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to load portfolio' });
+  }
+});
+
+/** Save user portfolio holdings */
+app.post('/api/portfolio', (req, res) => {
+  try {
+    const holdings = req.body?.holdings;
+    if (!Array.isArray(holdings)) return res.status(400).json({ error: 'Holdings must be an array' });
+    saveStoredPortfolioHoldings(holdings);
+    res.json({ ok: true, count: holdings.length });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to save portfolio' });
+  }
+});
+
+/** Live FX Rates endpoint (ECB-based, cached 1 hour, fallback to institutional table) */
+let serverCachedFxRates: Record<string, number> = {
+  USD: 1.0,
+  INR: 86.5,
+  EUR: 0.92,
+  GBP: 0.79,
+  JPY: 154.2,
+  CAD: 1.39,
+  AUD: 1.56,
+  CHF: 0.88,
+  SGD: 1.34,
+  HKD: 7.78,
+  KRW: 1395.0,
+  TWD: 32.4,
+  BRL: 5.85,
+  SAR: 3.75,
+  SEK: 10.6,
+  DKK: 6.87,
+  NOK: 10.85,
+  ILS: 3.65,
+  ZAR: 18.2,
+  MXN: 20.3,
+  TRY: 35.8,
+  PLN: 4.02,
+  NZD: 1.72
+};
+let serverFxRatesTimestamp = 0;
+
+app.get('/api/fx/rates', async (req, res) => {
+  const now = Date.now();
+  if (now - serverFxRatesTimestamp > 3600000) {
+    try {
+      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=USD');
+      if (response.ok) {
+        const data: any = await response.json();
+        if (data && data.rates) {
+          for (const [k, v] of Object.entries(data.rates)) {
+            if (typeof v === 'number' && v > 0) {
+              serverCachedFxRates[k] = v;
+            }
+          }
+          serverFxRatesTimestamp = now;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  res.json({
+    base: 'USD',
+    rates: serverCachedFxRates,
+    timestamp: serverFxRatesTimestamp || now,
+    cached: true
+  });
 });
 
 /** Full company profile + live quote + risk score */
@@ -781,8 +931,10 @@ async function startServer() {
         marketDateKey(),
         'live'
       );
+      const tracked = countries.filter((c: any) => c.eventsCount > 0 || c.isCurated);
+      const target = tracked.length >= 5 ? tracked : countries.slice(0, 15);
       return Math.round(
-        countries.reduce((s: number, c: { riskScore: number }) => s + c.riskScore, 0) / countries.length
+        target.reduce((s: number, c: { riskScore: number }) => s + c.riskScore, 0) / target.length
       );
     });
     initDashboardTrendService();

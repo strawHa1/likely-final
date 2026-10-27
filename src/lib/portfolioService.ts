@@ -1,12 +1,9 @@
 /**
- * Client-side portfolio store backing the AI Assistant's invest / withdraw flow.
+ * Client-side portfolio store backing the AI Assistant's invest / withdraw flow
+ * and the Portfolio Risk page.
  *
- * Follows the same persistence pattern already used by watchlistService and
- * MarketSearch: localStorage as the source of truth plus a window CustomEvent so
- * any mounted page (Portfolio Risk, chat) re-reads after a mutation.
- *
- * Holdings are seeded once from INITIAL_PORTFOLIO so the Portfolio Risk page keeps
- * showing its existing positions until the user actually trades.
+ * Persists in localStorage and syncs with the server backend (/api/portfolio)
+ * so server endpoints also know about user holdings.
  */
 
 import { PortfolioItem } from '../types';
@@ -46,6 +43,12 @@ export interface TradeRequest {
   amount: number;
   price: number;
   riskScore?: number;
+  sector?: string;
+  country?: string;
+  region?: string;
+  countryIso?: string;
+  countryFlag?: string;
+  recommendedAction?: string;
 }
 
 export interface TradeResult {
@@ -67,6 +70,17 @@ function readJson<T>(key: string, fallback: T): T {
 }
 
 /**
+ * Derive action from risk score: Safe, Monitor, Review, Hedge, Reduce
+ */
+export function deriveActionFromRiskScore(riskScore: number): string {
+  if (riskScore >= 80) return 'Reduce';
+  if (riskScore >= 70) return 'Hedge';
+  if (riskScore >= 55) return 'Review';
+  if (riskScore >= 40) return 'Monitor';
+  return 'Safe';
+}
+
+/**
  * Allocation percentages are derived using Largest Remainder Method,
  * ensuring they sum to exactly 100.0%.
  */
@@ -83,29 +97,42 @@ function persist(holdings: PortfolioItem[], cash: number): void {
   localStorage.setItem(HOLDINGS_KEY, JSON.stringify(holdings));
   localStorage.setItem(CASH_KEY, JSON.stringify(Number(cash.toFixed(2))));
   window.dispatchEvent(new CustomEvent(PORTFOLIO_UPDATED_EVENT));
+
+  // Sync to server backend asynchronously
+  fetch('/api/portfolio', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ holdings, cash })
+  }).catch(() => {});
 }
 
 export function getHoldings(): PortfolioItem[] {
   const stored = readJson<PortfolioItem[] | null>(HOLDINGS_KEY, null);
   if (stored && Array.isArray(stored) && stored.length > 0) {
     const hydrated = stored.map((item) => {
-      const seed = INITIAL_PORTFOLIO.find((s) => s.ticker.toUpperCase() === item.ticker?.toUpperCase());
+      const seed = INITIAL_PORTFOLIO.find(
+        (s) => s.ticker.toUpperCase() === item.ticker?.toUpperCase()
+      );
       const price = item.price ?? item.avgCost ?? item.costBasis ?? seed?.price ?? 100;
       const prevClose = item.prevClose ?? seed?.prevClose ?? price;
+      const riskScore = item.riskScore ?? seed?.riskScore ?? 50;
       return {
         ...item,
         name: item.name || item.companyName || seed?.name || item.ticker,
         companyName: item.companyName || item.name || seed?.companyName || item.ticker,
-        sector: item.sector || seed?.sector || 'General',
+        sector: item.sector || seed?.sector || 'Diversified',
+        country: item.country || seed?.country || 'Global',
+        region: item.region || seed?.region || 'Global',
         price,
         prevClose,
         shares: item.shares ?? seed?.shares ?? 0,
-        riskScore: item.riskScore ?? seed?.riskScore ?? 50
+        riskScore,
+        action: item.action || item.recommendedAction || deriveActionFromRiskScore(riskScore)
       };
     });
     return recalcAllocations(hydrated);
   }
-  // First run: seed from the existing mock portfolio so nothing appears empty.
+  // First run: seed from the existing mock portfolio
   return recalcAllocations(INITIAL_PORTFOLIO.map((h) => ({ ...h })));
 }
 
@@ -125,14 +152,21 @@ export function getHolding(ticker: string): PortfolioItem | undefined {
 
 /**
  * Applies an invest (buy) or withdraw (sell) order at the supplied live price.
- *
- * Validation happens before any state is written, so a rejected order never
- * mutates holdings or cash:
- *   invest   — amount must be positive and covered by the cash balance
- *   withdraw — the position must exist and be worth at least the amount
  */
 export function executeTrade(request: TradeRequest): TradeResult {
-  const { action, companyName, amount, price, riskScore } = request;
+  const {
+    action,
+    companyName,
+    amount,
+    price,
+    riskScore,
+    sector,
+    country,
+    region,
+    countryIso,
+    countryFlag,
+    recommendedAction
+  } = request;
   const ticker = request.ticker.toUpperCase();
   const holdings = getHoldings();
   const cash = getCashBalance();
@@ -150,6 +184,9 @@ export function executeTrade(request: TradeRequest): TradeResult {
   let nextHoldings: PortfolioItem[];
   let nextCash: number;
 
+  const score = riskScore ?? existing?.riskScore ?? 50;
+  const holdingAction = recommendedAction || deriveActionFromRiskScore(score);
+
   if (action === 'invest') {
     if (amount > cash) {
       return {
@@ -162,31 +199,38 @@ export function executeTrade(request: TradeRequest): TradeResult {
     }
 
     if (existing) {
-      // Blend the new purchase into the existing position's average cost.
+      // Blend purchase into average cost
       const totalShares = existing.shares + shares;
       const totalCost = existing.shares * (existing.avgCost || existing.costBasis || price) + amount;
       nextHoldings = [...holdings];
       nextHoldings[index] = {
         ...existing,
         shares: Number(totalShares.toFixed(4)),
-        avgCost: Number((totalCost / totalShares).toFixed(2))
+        avgCost: Number((totalCost / totalShares).toFixed(2)),
+        price: Number(price.toFixed(2)),
+        riskScore: score,
+        action: holdingAction
       };
     } else {
       nextHoldings = [
         ...holdings,
         {
-          id: `port-${ticker.toLowerCase()}-${Date.now()}`,
+          id: `port-${ticker.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
           ticker,
           companyName,
           name: companyName,
-          sector: 'General',
+          sector: sector || 'Diversified',
+          country: country || 'Global',
+          region: region || 'Global',
+          countryIso,
+          countryFlag,
           shares,
           price: Number(price.toFixed(2)),
           prevClose: Number(price.toFixed(2)),
           avgCost: Number(price.toFixed(2)),
           allocationPct: 0,
-          riskScore: riskScore ?? 50,
-          action: 'Monitor'
+          riskScore: score,
+          action: holdingAction
         }
       ];
     }
@@ -210,7 +254,7 @@ export function executeTrade(request: TradeRequest): TradeResult {
     const remainingShares = Number((existing.shares - shares).toFixed(4));
     nextHoldings = [...holdings];
     if (remainingShares <= 0.0001) {
-      nextHoldings.splice(index, 1); // Position fully closed.
+      nextHoldings.splice(index, 1); // Fully closed
     } else {
       nextHoldings[index] = { ...existing, shares: remainingShares };
     }

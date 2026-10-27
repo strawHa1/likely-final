@@ -123,9 +123,11 @@ export function useDashboardStats(events: GlobalEvent[], alerts: AlertItem[]) {
         throw new Error('Failed to load dashboard data');
       }
 
+      const activeOrCurated = countries.filter((c) => c.eventsCount > 0 || c.isCurated);
+      const scoreCountries = activeOrCurated.length >= 5 ? activeOrCurated : countries.slice(0, 15);
       const globalRiskScore =
-        countries.length > 0
-          ? Math.round(countries.reduce((s, c) => s + c.riskScore, 0) / countries.length)
+        scoreCountries.length > 0
+          ? Math.round(scoreCountries.reduce((s, c) => s + c.riskScore, 0) / scoreCountries.length)
           : 50;
 
       const trend: TrendPoint[] = trendData.points || [];

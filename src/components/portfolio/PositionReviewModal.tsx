@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   ShieldAlert,
@@ -9,16 +9,21 @@ import {
   Sliders,
   DollarSign,
   PieChart as PieIcon,
-  Briefcase
+  Briefcase,
+  Globe
 } from 'lucide-react';
 import { BaseHolding, formatCurrency, formatPercent, getRiskSignalBand } from '../../utils/portfolioMath';
-import { CompanyRisk } from '../../types';
+import { CompanyRisk, CompanyProfile } from '../../types';
+import { fetchCompanyProfile } from '../../lib/watchlistService';
 
 interface PositionReviewModalProps {
   holding: BaseHolding & {
     positionValue: number;
     allocationPct: number;
     isFlagged: boolean;
+    country?: string;
+    region?: string;
+    action?: string;
   };
   company?: CompanyRisk;
   userTolerance: number;
@@ -35,6 +40,8 @@ export const PositionReviewModal: React.FC<PositionReviewModalProps> = ({
   onOpenHedgePlan,
   onNavigateToCompany
 }) => {
+  const [liveCompany, setLiveCompany] = useState<CompanyProfile | CompanyRisk | null>(company || null);
+
   // Close on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -44,14 +51,27 @@ export const PositionReviewModal: React.FC<PositionReviewModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
+  // Fetch company profile dynamically if not provided in mock data
+  useEffect(() => {
+    if (!company) {
+      fetchCompanyProfile(holding.ticker)
+        .then((p) => {
+          if (p) setLiveCompany(p);
+        })
+        .catch(() => {});
+    }
+  }, [company, holding.ticker]);
+
   const signal = getRiskSignalBand(holding.riskScore, userTolerance);
+  const activeCompany = liveCompany || company;
+  const countryName = holding.country || activeCompany?.country || 'Global';
 
   const contributingFactors = [
     `Baseline institutional tail-risk score of ${holding.riskScore}/100.`,
     holding.isFlagged
       ? `Exceeds your configured risk tolerance threshold of ${userTolerance}/100.`
       : `Within your configured risk tolerance threshold of ${userTolerance}/100.`,
-    company?.keyRisks?.[0] || `Sector concentration exposure in ${holding.sector}.`,
+    activeCompany?.keyRisks?.[0] || `Sector concentration exposure in ${holding.sector} (${countryName}).`,
     `Represents ${holding.allocationPct}% of total portfolio capital (${formatCurrency(
       holding.positionValue
     )}).`
@@ -99,8 +119,12 @@ export const PositionReviewModal: React.FC<PositionReviewModalProps> = ({
                   {holding.name}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                {holding.sector} &bull; {holding.shares} Shares @ ${holding.price.toFixed(2)}
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono flex items-center gap-1 mt-0.5">
+                <span>{holding.sector}</span>
+                <span>&bull;</span>
+                <span>{countryName}</span>
+                <span>&bull;</span>
+                <span>{holding.shares} Shares @ ${holding.price.toFixed(2)}</span>
               </p>
             </div>
           </div>
@@ -171,7 +195,7 @@ export const PositionReviewModal: React.FC<PositionReviewModalProps> = ({
             <span
               className={`px-2 py-0.5 rounded text-[10px] font-bold border font-mono ${signal.badgeClass}`}
             >
-              {signal.label}
+              {holding.action || signal.label}
             </span>
           </div>
 

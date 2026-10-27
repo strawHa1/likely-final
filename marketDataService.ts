@@ -4,7 +4,13 @@ import { getCachedQuote, setCachedQuote, CachedQuote } from './quoteCache.js';
 import { getImpactState, refreshImpactData } from './impactService.js';
 import { fetchHeadlines } from './newsApi.js';
 import { getCountryHistory } from './dashboardTrendService.js';
-import { fetchYahooQuote } from './yahooFinance.js';
+import { fetchYahooQuote, fetchYahooCompanyMeta, normalizeExchangeCode } from './yahooFinance.js';
+import {
+  getAllCountriesUniverse,
+  resolveCountryEntry,
+  matchesCountryKeyword,
+  CountryBaseEntry
+} from './countryUniverse.js';
 
 export interface WatchlistEntry {
   ticker: string;
@@ -14,6 +20,8 @@ export interface WatchlistEntry {
   country: string;
   region: string;
 }
+
+export type RecommendedAction = 'Safe' | 'Monitor' | 'Review' | 'Hedge' | 'Reduce';
 
 export interface CompanyProfileResponse {
   ticker: string;
@@ -33,52 +41,165 @@ export interface CompanyProfileResponse {
   quote: CachedQuote | null;
   activeImpactCount: number;
   inWatchlist: boolean;
+  action: RecommendedAction;
+  countryIso?: string;
+  countryFlag?: string;
 }
 
 const SECTOR_BASE_RISK: Record<string, number> = {
   Semiconductors: 78,
   Technology: 48,
   Energy: 72,
-  Defense: 38,
-  Aerospace: 52,
-  Financials: 55,
+  Defense: 58,
+  Aerospace: 54,
+  Financials: 52,
+  'Financial Services': 52,
   Logistics: 65,
   Automotive: 58,
   Mining: 62,
+  'Basic Materials': 60,
   Healthcare: 40,
-  Industrials: 50
+  Industrials: 50,
+  'Consumer Defensive': 36,
+  'Consumer Cyclical': 46,
+  Utilities: 38,
+  'Real Estate': 45,
+  Communication: 42,
+  Diversified: 50
 };
 
-const HIGH_EXPOSURE_COUNTRIES = new Set(['Taiwan', 'China', 'Israel', 'Ukraine', 'Iran']);
+const HIGH_EXPOSURE_COUNTRIES = new Set([
+  'Taiwan', 'China', 'Israel', 'Ukraine', 'Iran', 'Russia', 'Saudi Arabia'
+]);
 
-let watchlistCache: WatchlistEntry[] | null = null;
-let countriesCache: any[] | null = null;
+const CACHE_DIR = path.join(process.cwd(), '.cache');
+const USER_WATCHLIST_FILE = path.join(CACHE_DIR, 'user-watchlist.json');
+const USER_PORTFOLIO_FILE = path.join(CACHE_DIR, 'user-portfolio.json');
+
+function ensureCacheDir() {
+  if (!fs.existsSync(CACHE_DIR)) {
+    try {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 function loadJson<T>(filename: string): T {
   const p = path.join(process.cwd(), 'data', filename);
   return JSON.parse(fs.readFileSync(p, 'utf-8')) as T;
 }
 
+let watchlistCache: WatchlistEntry[] | null = null;
+
+function loadUserWatchlist(): WatchlistEntry[] {
+  ensureCacheDir();
+  try {
+    if (fs.existsSync(USER_WATCHLIST_FILE)) {
+      return JSON.parse(fs.readFileSync(USER_WATCHLIST_FILE, 'utf-8')) as WatchlistEntry[];
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function saveUserWatchlist(entries: WatchlistEntry[]): void {
+  ensureCacheDir();
+  try {
+    fs.writeFileSync(USER_WATCHLIST_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getWatchlist(): WatchlistEntry[] {
-  if (!watchlistCache) watchlistCache = loadJson('watchlist.json');
+  if (!watchlistCache) {
+    const seed: WatchlistEntry[] = loadJson('watchlist.json');
+    const user = loadUserWatchlist();
+    const map = new Map<string, WatchlistEntry>();
+    for (const w of seed) map.set(w.ticker.toUpperCase(), w);
+    for (const u of user) map.set(u.ticker.toUpperCase(), u);
+    watchlistCache = Array.from(map.values());
+  }
   return watchlistCache;
+}
+
+export function addWatchlistEntry(entry: WatchlistEntry): WatchlistEntry {
+  const all = getWatchlist();
+  const upper = entry.ticker.toUpperCase();
+  const updatedEntry = { ...entry, ticker: upper };
+  const user = loadUserWatchlist().filter((e) => e.ticker.toUpperCase() !== upper);
+  user.push(updatedEntry);
+  saveUserWatchlist(user);
+
+  const map = new Map<string, WatchlistEntry>();
+  for (const w of all) map.set(w.ticker.toUpperCase(), w);
+  map.set(upper, updatedEntry);
+  watchlistCache = Array.from(map.values());
+  return updatedEntry;
+}
+
+export function removeWatchlistEntry(ticker: string): boolean {
+  const upper = ticker.toUpperCase();
+  const user = loadUserWatchlist().filter((e) => e.ticker.toUpperCase() !== upper);
+  saveUserWatchlist(user);
+
+  if (watchlistCache) {
+    watchlistCache = watchlistCache.filter((e) => e.ticker.toUpperCase() !== upper);
+  }
+  return true;
 }
 
 export function searchWatchlist(query: string, limit = 12): WatchlistEntry[] {
   const q = query.trim().toLowerCase();
-  if (!q) return getWatchlist().slice(0, limit);
-  return getWatchlist()
+  const list = getWatchlist();
+  if (!q) return list.slice(0, limit);
+  return list
     .filter(
       (e) =>
         e.ticker.toLowerCase().includes(q) ||
         e.companyName.toLowerCase().includes(q) ||
-        e.sector.toLowerCase().includes(q)
+        e.sector.toLowerCase().includes(q) ||
+        (e.country && e.country.toLowerCase().includes(q))
     )
     .slice(0, limit);
 }
 
 export function getWatchlistEntry(ticker: string): WatchlistEntry | undefined {
-  return getWatchlist().find((e) => e.ticker === ticker.toUpperCase());
+  const upper = ticker.toUpperCase().trim();
+  const base = upper.split('.')[0];
+  return (
+    getWatchlist().find((e) => e.ticker.toUpperCase() === upper) ||
+    getWatchlist().find((e) => e.ticker.toUpperCase() === base)
+  );
+}
+
+// User portfolio persistence on server
+export function getStoredPortfolioHoldings(): any[] {
+  ensureCacheDir();
+  try {
+    if (fs.existsSync(USER_PORTFOLIO_FILE)) {
+      return JSON.parse(fs.readFileSync(USER_PORTFOLIO_FILE, 'utf-8'));
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    return loadJson('portfolio.json');
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredPortfolioHoldings(holdings: any[]): void {
+  ensureCacheDir();
+  try {
+    fs.writeFileSync(USER_PORTFOLIO_FILE, JSON.stringify(holdings, null, 2), 'utf-8');
+  } catch {
+    /* ignore */
+  }
 }
 
 function isUSMarketOpen(): boolean {
@@ -113,7 +234,10 @@ const STOCK_BASELINES: Record<string, { price: number; prevClose: number }> = {
   ASML: { price: 845, prevClose: 860.2 },
   AMD: { price: 154.2, prevClose: 151.8 },
   META: { price: 520, prevClose: 515 },
-  TSLA: { price: 245, prevClose: 250 }
+  TSLA: { price: 245, prevClose: 250 },
+  'TATASTEEL.NS': { price: 158.4, prevClose: 156.8 },
+  '005930.KS': { price: 68500, prevClose: 69200 },
+  'NESN.SW': { price: 84.6, prevClose: 85.1 }
 };
 
 function simulatedQuote(symbol: string): CachedQuote {
@@ -176,8 +300,7 @@ export async function fetchQuote(symbol: string): Promise<CachedQuote | null> {
   const yahoo = await fetchYahooQuote(sym);
   if (yahoo) return yahoo;
 
-  if (!finnhubKey) return simulatedQuote(sym);
-  return null;
+  return simulatedQuote(sym);
 }
 
 export async function fetchQuotesBatch(symbols: string[]): Promise<Record<string, CachedQuote>> {
@@ -225,13 +348,12 @@ async function fetchFinnhubProfile(ticker: string): Promise<{
   }
 }
 
-function mapCountryToRegion(country: string): string {
-  const c = country.toUpperCase();
-  if (['US', 'UNITED STATES', 'USA'].some((x) => c.includes(x))) return 'North America';
-  if (['TW', 'TAIWAN', 'CN', 'CHINA', 'JP', 'JAPAN', 'KR', 'KOREA'].some((x) => c.includes(x))) return 'East Asia';
-  if (['IN', 'INDIA'].some((x) => c.includes(x))) return 'South Asia';
-  if (['GB', 'UK', 'DE', 'GERMANY', 'FR', 'FRANCE', 'NL'].some((x) => c.includes(x))) return 'Europe';
-  return 'Global';
+export function computeRecommendedAction(riskScore: number): RecommendedAction {
+  if (riskScore >= 80) return 'Reduce';
+  if (riskScore >= 70) return 'Hedge';
+  if (riskScore >= 55) return 'Review';
+  if (riskScore >= 40) return 'Monitor';
+  return 'Safe';
 }
 
 export function computeRiskScoreForMeta(
@@ -241,19 +363,54 @@ export function computeRiskScoreForMeta(
 ): number {
   let score = SECTOR_BASE_RISK[meta.sector] ?? 50;
   if (HIGH_EXPOSURE_COUNTRIES.has(meta.country)) score += 12;
+
+  // Factor in country risk from live country risk store if available
+  const countryEntry = resolveCountryEntry(meta.country, meta.ticker);
+  if (countryRiskCache) {
+    const liveCountry = countryRiskCache.countries.find((c) => c.isoCode === countryEntry.isoCode);
+    if (liveCountry && liveCountry.riskScore >= 70) score += 8;
+    else if (liveCountry && liveCountry.riskScore <= 30) score -= 5;
+  }
+
   if (quote) score += Math.min(15, Math.abs(quote.percentChange) * 2);
-  score += Math.min(10, impactCount * 3);
+  score += Math.min(12, impactCount * 3);
+
   if (meta.sector.toLowerCase().includes('semiconductor') && meta.country === 'Taiwan') score += 8;
   return Math.min(100, Math.max(10, Math.round(score)));
 }
 
 function buildKeyRisksForMeta(meta: { sector: string; country: string }, impactCount: number): string[] {
   const risks: string[] = [];
-  if (meta.country === 'Taiwan' || meta.country.includes('TW')) risks.push('Taiwan Strait geopolitical and maritime disruption exposure');
-  if (meta.sector.toLowerCase().includes('semiconductor')) risks.push('Advanced chip export control and supply chain concentration');
-  if (meta.sector.toLowerCase().includes('energy') || meta.sector.toLowerCase().includes('oil')) risks.push('Oil transit chokepoint risk (Hormuz, Red Sea)');
-  if (impactCount > 0) risks.push(`${impactCount} active news impact signal(s) detected in last 24h`);
-  if (risks.length === 0) risks.push('Macroeconomic and sector-wide market volatility');
+  if (meta.country === 'Taiwan' || meta.country.includes('TW')) {
+    risks.push('Taiwan Strait geopolitical and maritime disruption exposure');
+  }
+  if (meta.country === 'Israel' || meta.country === 'Iran' || meta.country === 'Saudi Arabia') {
+    risks.push('Middle East regional conflict & oil transit chokepoint exposure');
+  }
+  if (meta.country === 'Ukraine' || meta.country === 'Russia') {
+    risks.push('Eastern European conflict, sanctions, and Black Sea corridor risk');
+  }
+  if (meta.sector.toLowerCase().includes('semiconductor')) {
+    risks.push('Advanced chip export control and supply chain concentration');
+  }
+  if (meta.sector.toLowerCase().includes('energy') || meta.sector.toLowerCase().includes('oil')) {
+    risks.push('Oil transit chokepoint risk (Hormuz, Red Sea, Suez)');
+  }
+  if (meta.sector.toLowerCase().includes('defense') || meta.sector.toLowerCase().includes('aerospace')) {
+    risks.push('Government defense budget cycles & critical component supply lead times');
+  }
+  if (meta.sector.toLowerCase().includes('financial') || meta.sector.toLowerCase().includes('bank')) {
+    risks.push('Sovereign interest rate path & foreign capital flow sensitivity');
+  }
+  if (meta.sector.toLowerCase().includes('basic materials') || meta.sector.toLowerCase().includes('mining')) {
+    risks.push('Global commodity price cycles & cross-border export tariffs');
+  }
+  if (impactCount > 0) {
+    risks.push(`${impactCount} active news impact signal(s) detected in last 24h`);
+  }
+  if (risks.length === 0) {
+    risks.push(`Macroeconomic and regional risk factors (${meta.country || 'Global'})`);
+  }
   return risks.slice(0, 4);
 }
 
@@ -284,18 +441,6 @@ export function computeRiskScore(
   );
 }
 
-function buildKeyRisks(entry: WatchlistEntry, impactCount: number): string[] {
-  const risks: string[] = [];
-  if (entry.country === 'Taiwan') risks.push('Taiwan Strait geopolitical and maritime disruption exposure');
-  if (entry.sector === 'Semiconductors') risks.push('Advanced chip export control and supply chain concentration');
-  if (entry.sector === 'Energy') risks.push('Oil transit chokepoint risk (Hormuz, Red Sea)');
-  if (entry.sector === 'Defense') risks.push('Defense procurement cycle and supply chain lead times');
-  if (entry.sector === 'Logistics') risks.push('Maritime freight rate volatility and route disruptions');
-  if (impactCount > 0) risks.push(`${impactCount} active news impact signal(s) detected in last 24h`);
-  if (risks.length === 0) risks.push('Macroeconomic and sector-wide market volatility');
-  return risks.slice(0, 4);
-}
-
 function buildRiskTrend(baseScore: number): { date: string; score: number }[] {
   const days = ['Jul 1', 'Jul 5', 'Jul 10', 'Jul 15', 'Jul 20', 'Jul 25'];
   return days.map((date, i) => ({
@@ -307,21 +452,40 @@ function buildRiskTrend(baseScore: number): { date: string; score: number }[] {
 export async function getCompanyProfile(ticker: string): Promise<CompanyProfileResponse | null> {
   const sym = ticker.toUpperCase().trim();
   const baseSym = sym.split('.')[0];
-  const watchEntry = getWatchlistEntry(baseSym);
+  const watchEntry = getWatchlistEntry(sym) || getWatchlistEntry(baseSym);
 
-  const [quote, finnhub] = await Promise.all([fetchQuote(sym), fetchFinnhubProfile(sym)]);
+  const [quote, finnhub, yahooMeta] = await Promise.all([
+    fetchQuote(sym),
+    fetchFinnhubProfile(sym),
+    fetchYahooCompanyMeta(sym)
+  ]);
 
-  if (!finnhub && !quote && !watchEntry) return null;
+  if (!finnhub && !quote && !watchEntry && !yahooMeta) return null;
 
-  const name = finnhub?.name || watchEntry?.companyName || sym;
-  const sector = finnhub?.finnhubIndustry || watchEntry?.sector || 'Unknown';
-  const country = finnhub?.country || watchEntry?.country || 'Unknown';
-  const region = watchEntry?.region || mapCountryToRegion(country);
-  const exchange = finnhub?.exchange || watchEntry?.exchange || (sym.includes('.NS') ? 'NSE' : sym.includes('.BO') ? 'BSE' : 'US');
+  const rawName = finnhub?.name || yahooMeta?.name || watchEntry?.companyName || sym;
+  const name = rawName.replace(/\s+(Inc\.?|Corp\.?|Corporation|Ltd\.?|Limited|Co\.,?\s*Ltd\.?)$/i, '').trim() || rawName;
+  const sector = finnhub?.finnhubIndustry || yahooMeta?.sector || yahooMeta?.industry || watchEntry?.sector || 'Diversified';
+  const exchange =
+    finnhub?.exchange ||
+    yahooMeta?.exchange ||
+    watchEntry?.exchange ||
+    normalizeExchangeCode('', '', sym);
 
-  const impacts = getImpactState().impactedCompanies.filter((r) => r.ticker === baseSym || r.ticker === sym);
+  // Canonical country & region resolution across all ~250 countries & territories
+  const resolvedCountry = resolveCountryEntry(
+    finnhub?.country || watchEntry?.country,
+    sym,
+    exchange
+  );
+  const country = resolvedCountry.name;
+  const region = resolvedCountry.region;
+
+  const impacts = getImpactState().impactedCompanies.filter(
+    (r) => r.ticker === baseSym || r.ticker === sym
+  );
   const meta = { sector, country, ticker: sym };
   const riskScore = computeRiskScoreForMeta(meta, quote, impacts.length);
+  const action = computeRecommendedAction(riskScore);
   const sentiment = sentimentFromQuote(quote?.percentChange ?? 0);
 
   return {
@@ -332,22 +496,24 @@ export async function getCompanyProfile(ticker: string): Promise<CompanyProfileR
     region,
     exchange,
     marketCap: finnhub?.marketCap ? formatMarketCap(finnhub.marketCap) : 'N/A',
-    description: `${name} (${sym}) — ${sector} sector, listed on ${exchange}. Live market data and AI risk scoring powered by Finnhub.`,
+    description: `${name} (${sym}) — ${sector} sector, listed on ${exchange} (${country}, ${region}). Quantitative tail-risk scoring: ${riskScore}/100.`,
     riskScore,
     sentimentScore: sentiment.score,
     sentimentLabel: sentiment.label,
     keyRisks: buildKeyRisksForMeta(meta, impacts.length),
-    aiSummary: `${name} (${sym}) composite risk score: ${riskScore}/100. Sector: ${sector}, region: ${region}. Live volatility and ${impacts.length} recent news impact signal(s) factored in.`,
+    aiSummary: `${name} (${sym}) composite risk score: ${riskScore}/100 [Action: ${action}]. Sector: ${sector}, region: ${region}. Factoring live volatility and ${impacts.length} news impact signal(s).`,
     riskTrend: buildRiskTrend(riskScore),
     quote,
     activeImpactCount: impacts.length,
-    inWatchlist: !!watchEntry
+    inWatchlist: !!watchEntry,
+    action,
+    countryIso: resolvedCountry.isoCode,
+    countryFlag: resolvedCountry.flag
   };
 }
 
-export function getCountriesBase() {
-  if (!countriesCache) countriesCache = loadJson('countries-base.json');
-  return countriesCache;
+export function getCountriesBase(): CountryBaseEntry[] {
+  return getAllCountriesUniverse();
 }
 
 const SEVERITY_WEIGHT: Record<string, number> = {
@@ -384,23 +550,29 @@ export function computeLiveCountryRisk(
     isoCode: string;
     flag: string;
     region: string;
+    subregion?: string;
     riskScore: number;
     riskLevel: string;
     eventsCount: number;
     keyRisks: string[];
     scoreChanged: boolean;
     previousScore?: number;
+    isCurated?: boolean;
+    isHotspot?: boolean;
   }>;
   lastUpdated: string;
 } {
   const includeImpact = options.includeImpact !== false;
-  const base = getCountriesBase();
-  const impactState = includeImpact ? getImpactState() : { impactedCompanies: [] as { headline: string; description: string; severity: string }[] };
+  const base = getAllCountriesUniverse();
+  const impactState = includeImpact
+    ? getImpactState()
+    : { impactedCompanies: [] as { headline: string; description: string; severity: string }[] };
+
   const previousScores = countryRiskCache
     ? Object.fromEntries(countryRiskCache.countries.map((c) => [c.id, c.riskScore]))
     : {};
 
-  const countries = base.map((c: any) => {
+  const countries = base.map((c) => {
     let eventsCount = 0;
     let severitySum = 0;
     const vectors: string[] = [];
@@ -417,7 +589,7 @@ export function computeLiveCountryRisk(
 
     for (const record of impactState.impactedCompanies) {
       const text = `${record.headline} ${record.description}`.toLowerCase();
-      if (c.keywords.some((k: string) => text.includes(k))) {
+      if (c.keywords.some((k) => matchesCountryKeyword(text, k))) {
         addEvent(record.headline, SEVERITY_WEIGHT[record.severity] || 4);
       }
     }
@@ -425,19 +597,22 @@ export function computeLiveCountryRisk(
     for (const article of liveHeadlines) {
       const text = `${article.title} ${article.description}`.toLowerCase();
       const regionMatch = REGION_ISO_MAP[article.region] === c.isoCode;
-      const keywordMatch = c.keywords.some((k: string) => text.includes(k));
+      const keywordMatch = c.keywords.some((k) => matchesCountryKeyword(text, k));
       if (regionMatch || keywordMatch) {
         addEvent(article.title, SENTIMENT_WEIGHT[article.sentiment] || 4);
       }
     }
 
-    let riskScore = 25 + eventsCount * 5 + severitySum;
+    let riskScore = 20 + eventsCount * 5 + severitySum;
     if (eventsCount === 0) {
       const structuralBaseline: Record<string, number> = {
         TW: 45,
         UA: 50,
         OM: 40,
-        IR: 40
+        IR: 40,
+        IL: 45,
+        RU: 45,
+        CN: 38
       };
       if (structuralBaseline[c.isoCode]) {
         riskScore = Math.max(riskScore, structuralBaseline[c.isoCode]);
@@ -455,7 +630,9 @@ export function computeLiveCountryRisk(
       OM: ['Oil tanker transit risk', 'Maritime war insurance spikes'],
       US: ['Fiscal policy shifts', 'Critical infrastructure cyber risk'],
       IN: ['Currency volatility', 'Foreign capital flow sensitivity'],
-      JP: ['Yen exchange rate pressure', 'Export sector exposure']
+      JP: ['Yen exchange rate pressure', 'Export sector exposure'],
+      RU: ['Sanctions regime impact', 'Logistics friction in sovereign trade'],
+      CN: ['Trade tariffs & maritime supply chain friction', 'Property & manufacturing cycle']
     };
 
     const prevScore = previousScores[c.id];
@@ -466,16 +643,29 @@ export function computeLiveCountryRisk(
       isoCode: c.isoCode,
       flag: c.flag,
       region: c.region,
+      subregion: c.subregion,
       riskScore,
       riskLevel,
       eventsCount,
-      keyRisks: vectors.length > 0 ? vectors : defaultRisks[c.isoCode] || ['Regional macroeconomic volatility'],
+      keyRisks:
+        vectors.length > 0
+          ? vectors
+          : defaultRisks[c.isoCode] || [
+              `No active geopolitical shock alerts in 24h`,
+              `Baseline macroeconomic monitoring (${c.region})`
+            ],
       scoreChanged: prevScore != null && prevScore !== riskScore,
-      previousScore: prevScore != null && prevScore !== riskScore ? prevScore : undefined
+      previousScore: prevScore != null && prevScore !== riskScore ? prevScore : undefined,
+      isCurated: c.isCurated,
+      isHotspot: c.isHotspot
     };
   });
 
-  countries.sort((a, b) => b.riskScore - a.riskScore);
+  countries.sort((a, b) => {
+    if (b.riskScore !== a.riskScore) return b.riskScore - a.riskScore;
+    return a.name.localeCompare(b.name);
+  });
+
   return { countries, lastUpdated: new Date().toISOString() };
 }
 
